@@ -1,0 +1,90 @@
+import cv2
+import serial
+import time
+from ultralytics import YOLO
+# Set up the serial connection to Arduino
+ser = serial.Serial('COM5', 9600, timeout=1)  # Replace 'COM6' with your port
+time.sleep(2)  # Wait for the connection to establish
+
+# Load the YOLO model
+model = YOLO('best.pt')  # Ensure 'best.pt' is in the correct directory
+
+CAMERA_WIDTH = 1280
+CAMERA_HEIGHT = 720
+
+# Function to send angle command to Arduino
+def send_angle_command(base_angle, shoulder_angle, elbow_angle, wrist_angle):
+    """Send servo angles to Arduino."""
+    command = f"{base_angle},{shoulder_angle},{elbow_angle},{wrist_angle}\n"
+    ser.write(command.encode())
+    print(f"Sent: {command.strip()}")
+
+    response = ser.readline().decode().strip()
+    if response:
+        print(f"Arduino Response: {response}")
+
+def open_camera():
+    """Open the camera and perform object detection."""
+    cap = cv2.VideoCapture(1)
+
+    if not cap.isOpened():
+        print("Error: Could not open the camera.")
+        return
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print("Failed to grab frame.")
+            break
+
+        # Perform object detection using YOLO
+        results = model(frame)
+
+        # Extract detections and process them
+        for result in results:
+            boxes = result.boxes  # Bounding boxes
+            for box in boxes:
+                x_min, y_min, x_max, y_max = map(int, box.xyxy[0])  # Extract box coordinates
+                confidence = box.conf[0]  # Confidence score
+
+                if confidence > 0.7:
+                    center_x = (x_min + x_max -100) // 2
+                    center_y = (y_min + y_max - 100) // 2
+
+                    # Example z-coordinate (can be replaced with more complex depth logic)
+                    z = 100.0
+
+                    print(f"Detected object at center: ({center_x}, {center_y}, {z})")
+
+                    # Map detected coordinates to angles
+                    base_angle = 100 - int(center_x * (180 / CAMERA_WIDTH))  # Map X to base angle
+                    shoulder_angle =125 - int(center_y * (100 / CAMERA_HEIGHT))  # Map Y to shoulder angle
+                    elbow_angle = 48 - int(center_y * (90 / CAMERA_HEIGHT))   # Example fixed angle for elbow
+                    wrist_angle = 60     # Example fixed angle for wrist
+
+                    # Send angles to Arduino
+                    send_angle_command(base_angle, shoulder_angle, elbow_angle, wrist_angle)
+
+                    # Draw bounding box
+                    cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
+                    cv2.circle(frame, (center_x, center_y), 5, (255, 0, 0), -1)  # Blue circle at center
+
+                    # Add label with confidence
+                    label_text = f"Object: {confidence:.2f}"
+                    cv2.putText(frame, label_text, (x_min, y_min - 100), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+        # Show the frame with detections
+        cv2.imshow('Detection Feed', frame)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+try:
+    open_camera()
+except KeyboardInterrupt:
+    print("Program interrupted.")
+finally:
+    ser.close()
