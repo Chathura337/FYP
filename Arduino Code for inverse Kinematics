@@ -1,0 +1,104 @@
+#include <Servo.h>
+
+// Define link lengths in millimeters
+const float h1 = 64.0;
+const float l1 = 15.0;
+const float l2 = 80.0;
+const float l3I = 35.0;
+const float l3O = 35.0;
+const float l4 = 80.0;
+const float l5 = 65.0;
+const float d5 = 5.0;
+
+// Define constraints
+const float maxReach = 200.0; // Maximum reach of the arm in XY plane
+const float maxHeight = 150.0; // Maximum height the arm can reach
+const float minHeight = 20.0;  // Minimum height the arm can reach
+
+// Servo objects for each joint
+Servo baseServo;
+Servo shoulderServo;
+Servo elbowServo;
+Servo wristServo;
+
+// Function to smoothly move a servo to a target position
+void smoothMove(Servo &servo, float targetAngle, int increment = 1, int delayTime = 15) {
+  int currentAngle = servo.read();
+  if (targetAngle > currentAngle) {
+    for (int pos = currentAngle; pos <= targetAngle; pos += increment) {
+      servo.write(pos);
+      delay(delayTime);
+    }
+  } else {
+    for (int pos = currentAngle; pos >= targetAngle; pos -= increment) {
+      servo.write(pos);
+      delay(delayTime);
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(9600);
+  
+  // Attach servos to pins
+  baseServo.attach(2);
+  shoulderServo.attach(10);
+  elbowServo.attach(11);
+  wristServo.attach(12);
+
+  Serial.println("4-DOF Robot Arm Ready. Send X,Y,Z coordinates.");
+}
+
+void loop() {
+  // Check if serial data is available
+  if (Serial.available() > 0) {
+    // Read and parse input
+    String input = Serial.readStringUntil('\n');
+    input.trim(); // Trim any extra spaces or newline characters
+
+    // Parse the x, y, z values from the input string
+    int firstSpace = input.indexOf(' ');
+    int secondSpace = input.indexOf(' ', firstSpace + 1);
+
+    float x = input.substring(0, firstSpace).toFloat();
+    float y = input.substring(firstSpace + 1, secondSpace).toFloat();
+    float z = input.substring(secondSpace + 1).toFloat();
+
+    Serial.print("Received coordinates: X=");
+    Serial.print(x);
+    Serial.print(" Y=");
+    Serial.print(y);
+    Serial.print(" Z=");
+    Serial.println(z);
+
+    // Check if position is within reachable range
+    if (sqrt(x * x + y * y) > maxReach || z > maxHeight || z < minHeight) {
+      Serial.println("Position out of range");
+      return;
+    }
+
+    // Inverse Kinematics Calculations
+    float thetaBase = atan2(y, x) * 180 / PI; // Base angle
+    float r = sqrt(x * x + y * y) - l1; 
+    float zOffset = z - h1;
+
+    float D = (r * r + zOffset * zOffset - l2 * l2 - l4 * l4) / (2 * l2 * l4);
+    if (abs(D) <= 1) {  // Valid positions only
+      float thetaElbow = atan2(sqrt(1 - D * D), D) * 180 / PI;
+      float thetaShoulder = (atan2(zOffset, r) - atan2(l4 * sin(thetaElbow * PI / 180), l2 + l4 * cos(thetaElbow * PI / 180))) * 180 / PI;
+      float thetaWrist = 90 - thetaShoulder - thetaElbow;
+
+      // Move servos smoothly to calculated angles
+      smoothMove(baseServo, constrain(thetaBase, 0, 180));
+      smoothMove(shoulderServo, constrain(thetaShoulder, 15, 165));
+      smoothMove(elbowServo, constrain(thetaElbow, 0, 180));
+      smoothMove(wristServo, constrain(thetaWrist, 0, 180));
+
+      Serial.println("Position reached smoothly!");
+    } else {
+      Serial.println("Invalid position");
+    }
+
+    delay(500); // Adjust delay as needed for smooth operation
+  }
+}
